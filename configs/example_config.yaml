@@ -1,0 +1,43 @@
+DATASET:
+  ROOT_DIR: "datasets/2024-MICCAI-Challenge"
+  NAME: "Ceph-Xray-MICCAI24"
+  IMG_EXT: ".bmp"
+  IMG_DIRS:
+    - "Training Set/images"
+  ANNOTATIONS_FILE: "Training Set/labels.csv"
+  PARTITION_FILE: "partitions/training_challenge_partition.json"
+  NUMBER_KEY_POINTS: 53
+  CHANNELS: 1
+  #  IMG_SIZE: [ 200,160 ]
+  IMG_SIZE: [ 448, 448 ]
+  PIXELS_PER_MM: [ 0.1,0.1 ]
+  CACHE_DIR: "datasets/dataset_cache"
+
+AUGMENTATIONS:
+  FLIP_INITIAL_COORDINATES: False
+  ROTATION: 1
+  SCALE: 0.05
+  TRANSLATION_X: [ -10,10 ]
+  TRANSLATION_Y: [ -10,10 ]
+  SHEAR: 1
+  MULTIPLY: 0.5
+  CUTOUT_ITERATIONS: 1
+  ELASTIC_TRANSFORM_ALPHA: 500
+  ELASTIC_TRANSFORM_SIGMA: 30
+
+
+TRAINLOSSES:
+  NLL_WEIGHT: 1
+  MASK_RADIUS: 0
+
+TRAIN:
+  BATCH_SIZE: 1
+  WEIGHT_DECAY: 0.0001
+  BETA1: 0.9
+  BETA2: 0.999
+  LR: 0.0001
+  EPOCHS: 11
+  LOG_VIDEO: False
+  LOG_IMAGE: True
+  LOG_INTERVAL: 2
+  RUN_TEST: True
