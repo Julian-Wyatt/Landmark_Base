@@ -4,9 +4,10 @@ import os
 
 import wandb
 
-from dataset_utils.dataset import LandmarkDataset
+from dataset_utils.dataset import LandmarkDataModule
 
 import utils.device
+from dataset_utils.dataset_caching import cache_data
 from trainers.resnet import resnet_unet
 from utils.early_stopping import EarlyStoppingWithWarmup
 
@@ -42,7 +43,7 @@ def main(args):
     import dotenv
     dotenv.load_dotenv()
 
-    if not os.path.exists(f"{args.saving_root_dir}/wandb") and args.saving_root_dir != "./":
+    if not os.path.exists(f"{args.saving_root_dir}/wandb"):
         os.makedirs(f"{args.saving_root_dir}/wandb")
 
     wandb.login(key=os.getenv("WANDB_API_KEY"))
@@ -52,7 +53,7 @@ def main(args):
 
     logger = WandbLogger(project=f"{cfg.TRAIN.PROJECT}",
                          name=f"{cfg.DATASET.NAME}-{args.config_path.split('/')[-1]}",
-                         save_dir=f"{args.saving_root_dir}/wandb",
+                         save_dir=f"{args.saving_root_dir}wandb",
                          experiment=run,
                          id=run.id)
 
@@ -106,12 +107,15 @@ def main(args):
     logger.experiment.save("./utils/*", policy="now")
     logger.experiment.save("./core/*", policy="now")
 
-    train_dataloader = LandmarkDataset.get_loaders(
-        cfg, batch_size=cfg.TRAIN.BATCH_SIZE, num_workers=cfg.TRAIN.NUM_WORKERS,
-        augment_train=cfg.DATASET.AUGMENT_TRAIN, partition="training")
-    validation_dataloader = LandmarkDataset.get_loaders(
-        cfg, batch_size=cfg.TRAIN.BATCH_SIZE, num_workers=cfg.TRAIN.NUM_WORKERS,
-        augment_train=False, partition="validation")
+    cache_data(cfg)
+
+    # train_dataloader = LandmarkDataset.get_loaders(
+    #     cfg, batch_size=cfg.TRAIN.BATCH_SIZE, num_workers=cfg.TRAIN.NUM_WORKERS,
+    #     augment_train=cfg.DATASET.AUGMENT_TRAIN, partition="training")
+    # validation_dataloader = LandmarkDataset.get_loaders(
+    #     cfg, batch_size=cfg.TRAIN.BATCH_SIZE, num_workers=cfg.TRAIN.NUM_WORKERS,
+    #     augment_train=False, partition="validation")
+    data_module = LandmarkDataModule(cfg, batch_size=cfg.TRAIN.BATCH_SIZE, num_workers=cfg.TRAIN.NUM_WORKERS)
 
     checkpoint_dir = f"{args.saving_root_dir}/tmp/checkpoints/{cfg.DATASET.NAME}-{cfg.TRAIN.MODEL_TYPE}-{logger.experiment.id}"
     if not os.path.exists(checkpoint_dir):
@@ -163,19 +167,19 @@ def main(args):
         precision = "32-true"
     else:
         precision = "16-mixed"
-
     trainer = L.Trainer(max_epochs=cfg.TRAIN.EPOCHS, accelerator=utils.device.get_device(),
                         logger=logger, check_val_every_n_epoch=cfg.TRAIN.VAL_EVERY_N_EPOCHS, precision=precision,
                         callbacks=[checkpoint_callback_sdr, checkpoint_callback_l2, accumulator, early_stopping],
                         default_root_dir=checkpoint_dir,
                         enable_progress_bar=False,
                         gradient_clip_algorithm="norm",
+                        detect_anomaly=False
                         )
 
     print(f"EXPERIMENT ID {logger.experiment.id}")
     checkpoint_file = f"{args.saving_root_dir}/tmp/checkpoints/{cfg.DATASET.NAME}-{cfg.TRAIN.MODEL_TYPE}-{cfg.TRAIN.CHECKPOINT_FILE}"
     if cfg.TRAIN.RUN_TRAIN:
-        trainer.fit(model, train_dataloader, validation_dataloader)
+        trainer.fit(model, datamodule=data_module)
 
         trainer.save_checkpoint(f"{checkpoint_dir}/train_end.ckpt")
 
@@ -184,16 +188,16 @@ def main(args):
         checkpoint_file = checkpoint_callback_sdr.best_model_path
 
     if cfg.TRAIN.RUN_TEST and os.path.exists(checkpoint_file):
-        test_dataloader = LandmarkDataset.get_loaders(
-            cfg, batch_size=cfg.TRAIN.BATCH_SIZE, num_workers=cfg.TRAIN.NUM_WORKERS,
-            augment_train=False, partition="testing")
+        # test_dataloader = LandmarkDataset.get_loaders(
+        #     cfg, batch_size=cfg.TRAIN.BATCH_SIZE, num_workers=cfg.TRAIN.NUM_WORKERS,
+        #     augment_train=False, partition="testing")
 
         if cfg.TRAIN.MODEL_TYPE.lower() == "default":
             logger.experiment.save("./trainers/resnet.py", policy="now")
             model = resnet_unet.load_from_checkpoint(checkpoint_file, cfg=cfg)
 
-        trainer.validate(model, validation_dataloader)
-        trainer.test(model, test_dataloader)
+        trainer.validate(model, datamodule=data_module)
+        trainer.test(model, datamodule=data_module)
     elif not os.path.exists(checkpoint_file):
         print(f"Checkpoint file {checkpoint_file} does not exist")
 

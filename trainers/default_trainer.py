@@ -146,7 +146,6 @@ class LandmarkDetection(L.LightningModule):
         return loss, loss_dict
 
     def shared_step(self, batch):
-        # torch.cuda.empty_cache()
         # image is batch["x"], landmark coordinates are batch["y"]
         # landmarks = self.get_landmark_input(batch)
         image = self.get_input(batch, "x")

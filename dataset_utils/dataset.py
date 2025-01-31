@@ -20,6 +20,8 @@ from core.config import Config
 from dataset_utils.preprocessing_utils import normalise, simulate_x_ray_artefacts, create_landmark_image, renormalise, \
     create_radial_mask
 
+import lightning as L
+
 
 class LandmarkDataset(Dataset):
 
@@ -277,14 +279,45 @@ class LandmarkDataset(Dataset):
         return output
 
     @classmethod
-    def get_loaders(cls, root_dir, batch_size, num_workers, augment_train=False, partition="training", shuffle=None):
+    def get_loaders(cls, cfg, batch_size, num_workers, augment_train=False, partition="training", shuffle=None):
         if shuffle is None:
             shuffle = partition == "training"
-        dataset = cls(root_dir, partition=partition, augment=augment_train and partition == "training")
+        dataset = cls(cfg, partition=partition, augment=augment_train and partition == "training")
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
-                                num_workers=num_workers, persistent_workers=True, pin_memory=True)
+                                num_workers=num_workers, persistent_workers=False, pin_memory=False)
 
         return dataloader
+
+
+class LandmarkDataModule(L.LightningDataModule):
+    def __init__(self, cfg, batch_size, num_workers, augment_train=False):
+        super().__init__()
+        self.cfg = cfg
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.augment_train = augment_train
+
+        self.pin_memory = True
+
+    def setup(self, stage=None):
+        if stage == "fit" or stage is None:
+            self.train_dataset = LandmarkDataset(self.cfg, partition="training", augment=True)
+            self.val_dataset = LandmarkDataset(self.cfg, partition="validation", augment=False)
+
+        if stage == "test" or stage is None:
+            self.test_dataset = LandmarkDataset(self.cfg, partition="testing", augment=False)
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                          pin_memory=self.pin_memory)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                          pin_memory=self.pin_memory)
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                          pin_memory=self.pin_memory)
 
 
 def main():
@@ -293,16 +326,19 @@ def main():
     plt.rcParams["figure.dpi"] = 200
 
     cfg = config.get_config("configs/local_test_ceph_MICCAI24.yaml")
+    # cfg = config.get_config("configs/example_config.yaml")
 
     cfg.DATASET.USE_GAUSSIAN_GT = True
     cfg.DATASET.GT_SIGMA = 1
 
-    train_loader = LandmarkDataset.get_loaders(cfg, 1, 0, True, partition="training", shuffle=True)
+    train_loader = LandmarkDataset.get_loaders(cfg, 4, 2, True, partition="training", shuffle=True)
     # train_loader = LandmarkDataset.get_loaders(cfg, 1, 1, False, partition="validation", shuffle=False)
     # train_loader = LandmarkDataset.get_loaders(cfg, 1, 1, False, partition="testing", shuffle=True)
     start = time.time()
 
     for b, batch in enumerate(train_loader):
+        print(batch.keys())
+        pass
         x = batch["x"]
         # print(x.min(), x.max(), x.float().mean(), x.float().std(), x.dtype, batch['name'])
         # if batch["name"][0] == "454":
