@@ -47,7 +47,7 @@ def calculate_ere(heatmap, predicted_point_scaled, pixel_size=1, significant_pix
 
 
 @torch.no_grad()
-def evaluate_landmark_detection(heatmaps, real_landmarks, pixel_sizes: torch.Tensor = None, ddh_metrics=False, epoch=1,
+def evaluate_landmark_detection(heatmaps, real_landmarks, pixel_sizes: torch.Tensor = None, epoch=1,
                                 top_k=1):
     # return log with manhatten distance, euclidean distance, and expected error
     if pixel_sizes is None:

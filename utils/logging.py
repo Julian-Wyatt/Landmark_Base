@@ -62,6 +62,9 @@ class LogWrapper:
         self.log = log_fn  # lambda x,y: self.log(x,y)
         self.test_coordinates_errors = defaultdict(list)
 
+    def train_log_image(self, img_log, batch):
+        pass
+
     def handle_train_logs(self):
         pass
 
@@ -72,13 +75,13 @@ class LogWrapper:
             log_scaled = evaluate_landmark_detection(img_log["heatmaps"], batch["y"],
                                                      pixel_sizes=batch["pixel_size"],
                                                      top_k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS)
-            self.log("val/l2_scaled", np.mean(log_scaled["l2"]), prog_bar=False, logger=True, on_step=False,
-                     on_epoch=True)
+            # self.log("val/l2_scaled", np.mean(log_scaled["l2"]), prog_bar=False, logger=True, on_step=False,
+            #          on_epoch=True)
             log["l2_scaled"] = log_scaled["l2"]
         else:
             log["l2_scaled"] = log["l2"]
         sweep_minimiser = np.mean(log["l2_scaled"])
-        self.log("val/l2", np.mean(log["l2"]), prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        # self.log("val/l2", np.mean(log["l2"]), prog_bar=False, logger=True, on_step=False, on_epoch=True)
         self.log("val/l1", np.mean(log["l1"]), prog_bar=False, logger=True, on_step=False, on_epoch=True)
         self.log("val/ere", np.mean(log["ere"]), prog_bar=False, logger=True, on_step=False, on_epoch=True)
         self.log("val/sweep_minimiser", sweep_minimiser, prog_bar=False, logger=True, on_step=False,
@@ -134,12 +137,10 @@ class LogWrapper:
         if self.cfg.TRAIN.LOG_TEST_METRICS:
 
             log = metrics.evaluate_landmark_detection(img_log["heatmaps"], batch["y"],
-                                                      ddh_metrics=self.cfg.DATASET.LOG_DDH_METRICS,
                                                       pixel_sizes=torch.Tensor([[1, 1]]).to(
                                                           img_log["heatmaps"].device),
                                                       top_k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS)
             log_scaled = metrics.evaluate_landmark_detection(img_log["heatmaps"], batch["y"],
-                                                             ddh_metrics=self.cfg.DATASET.LOG_DDH_METRICS,
                                                              pixel_sizes=batch["pixel_size"],
                                                              top_k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS)
 
@@ -148,7 +149,6 @@ class LogWrapper:
                 for annotator in range(batch["landmarks_per_annotator"].shape[1]):
                     annotations = batch["landmarks_per_annotator"][:, annotator, :, :]
                     log_annotator = metrics.evaluate_landmark_detection(img_log["heatmaps"], annotations,
-                                                                        ddh_metrics=False,
                                                                         pixel_sizes=batch["pixel_size"],
                                                                         top_k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS)
                     self.log(f"test/l2_annotator_{annotator}", np.mean(log_annotator["l2"]), prog_bar=False,
@@ -169,9 +169,6 @@ class LogWrapper:
                 # with open(f"{self.cfg.TRAIN.SAVING_ROOT_DIR}/tmp/{self.logger.experiment.id}/test_results.csv",
                 #           "a") as f:
                 #     output = [batch['name'][i], *[str(x) for x in log["l2"][i]], str(np.mean(log['l2'][i]))]
-                #     if self.cfg.DATASET.LOG_DDH_METRICS:
-                #         output += [str(np.mean(log["line_dist"][i]))]
-                #         output += [str(np.mean(log["angle_dist"][i]))]
                 #
                 #     f.write(",".join(output) + "\n")
 

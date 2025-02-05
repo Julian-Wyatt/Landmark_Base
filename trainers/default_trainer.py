@@ -46,6 +46,16 @@ class LandmarkDetection(L.LightningModule):
 
         self.log_wrapper = None
 
+    def transfer_batch_to_device(self, batch: Any, device: torch.device, dataloader_idx: int) -> Any:
+        batch["x"] = batch["x"].to(device, non_blocking=True)
+        batch["y"] = batch["y"].to(device, non_blocking=True)
+
+        batch["y_img"] = batch["y_img"].to(device, non_blocking=True)
+        if "y_img_radial" in batch:
+            batch["y_img_radial"] = batch["y_img_radial"].to(device, non_blocking=True)
+        batch["pixel_size"] = batch["pixel_size"].to(device, non_blocking=True)
+        return batch
+
     @contextmanager
     def ema_scope(self, context=None):
         if self.use_ema:
@@ -133,17 +143,22 @@ class LandmarkDetection(L.LightningModule):
 
         # coordinate l2 loss for loss dict
         with torch.no_grad():
-            coordinates = get_coordinates_from_heatmap(two_d_softmax(output),
+            coordinates = get_coordinates_from_heatmap(activated_heatmap,
                                                        k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS).flip(-1)
-            l2_coordinate_estimate = torch.mean(euclidean_distance(coordinates, batch["y"].float()))
-            loss_dict.update({f'{log_prefix}/l2_est': l2_coordinate_estimate.item()})
+            l2_coordinate_prediction = torch.mean(euclidean_distance(coordinates, batch["y"].float()))
+            loss_dict.update({f'{log_prefix}/l2': l2_coordinate_prediction.item()})
             pixel_sizes = batch["pixel_size"].unsqueeze(1)
             coordinates_scaled = coordinates * pixel_sizes
             real_landmarks_scaled = batch["y"].float() * pixel_sizes
-            l2_coordinate_estimate_scaled = torch.mean(euclidean_distance(coordinates_scaled, real_landmarks_scaled))
-            loss_dict.update({f'{log_prefix}/l2_est_scaled': l2_coordinate_estimate_scaled.item()})
+            l2_coordinate_prediction_scaled = torch.mean(euclidean_distance(coordinates_scaled, real_landmarks_scaled))
+            loss_dict.update({f'{log_prefix}/l2_scaled': l2_coordinate_prediction_scaled.item()})
 
-        return loss, loss_dict
+            # LOG EXAMPLE IMAGE
+
+            if self.do_img_logging:
+                pass
+
+        return loss, loss_dict, activated_heatmap
 
     def shared_step(self, batch):
         # image is batch["x"], landmark coordinates are batch["y"]
@@ -151,11 +166,11 @@ class LandmarkDetection(L.LightningModule):
         image = self.get_input(batch, "x")
 
         output = self(image)
-        loss, loss_dict = self.calculate_loss(output, batch)
+        loss, loss_dict, activated_output = self.calculate_loss(output, batch)
 
         self.log_dict(loss_dict, prog_bar=False, logger=True, on_step=True, on_epoch=True)
 
-        return loss, loss_dict, output
+        return loss, loss_dict, activated_output
 
     def training_step(self, batch, batch_idx):
 
@@ -193,6 +208,9 @@ class LandmarkDetection(L.LightningModule):
         if "val/l2" in self.trainer.callback_metrics:
             output_str += f" - Val L2: {self.trainer.callback_metrics['val/l2']:0.4f}"
         print(output_str)
+
+        # if self.current_epoch % 10 == 0:
+        #     self.model_ema.copy_to(self.model)
         # imgaug.seed(np.random.randint(0, 100000))
 
     # @abc.abstractmethod
@@ -279,24 +297,25 @@ class LandmarkDetection(L.LightningModule):
 
     def configure_optimizers(self):
         if self.cfg.TRAIN.OPTIMISER.lower() == "adam":
-            opt_g = torch.optim.Adam(self.model.parameters(), lr=self.cfg.TRAIN.LR,
-                                     weight_decay=self.cfg.TRAIN.WEIGHT_DECAY,
-                                     betas=(self.cfg.TRAIN.BETA1, self.cfg.TRAIN.BETA2))
+            opt = torch.optim.Adam(self.model.parameters(), lr=self.cfg.TRAIN.LR,
+                                   weight_decay=self.cfg.TRAIN.WEIGHT_DECAY,
+                                   betas=(self.cfg.TRAIN.BETA1, self.cfg.TRAIN.BETA2))
         elif self.cfg.TRAIN.OPTIMISER.lower() == "adamw":
-            opt_g = torch.optim.AdamW(self.model.parameters(), lr=self.cfg.TRAIN.LR,
-                                      weight_decay=self.cfg.TRAIN.WEIGHT_DECAY,
-                                      betas=(self.cfg.TRAIN.BETA1, self.cfg.TRAIN.BETA2))
-        elif self.cfg.TRAIN.OPTIMISER.lower() == "sgd":
-            opt_g = torch.optim.SGD(self.model.parameters(), lr=self.cfg.TRAIN.LR,
+            opt = torch.optim.AdamW(self.model.parameters(), lr=self.cfg.TRAIN.LR,
                                     weight_decay=self.cfg.TRAIN.WEIGHT_DECAY,
-                                    momentum=0.9)
+                                    betas=(self.cfg.TRAIN.BETA1, self.cfg.TRAIN.BETA2))
+        elif self.cfg.TRAIN.OPTIMISER.lower() == "sgd":
+            opt = torch.optim.SGD(self.model.parameters(), lr=self.cfg.TRAIN.LR,
+                                  weight_decay=self.cfg.TRAIN.WEIGHT_DECAY,
+                                  momentum=0.9)
         else:
             raise ValueError(f"Optimiser {self.cfg.TRAIN.OPTIMISER} not recognised")
         if self.cfg.TRAIN.USE_SCHEDULER == "multistep":
-            scheduler = [torch.optim.lr_scheduler.MultiStepLR(opt_g, milestones=[25, 40], gamma=0.25)]
+            # scheduler = [torch.optim.lr_scheduler.MultiStepLR(opt, milestones=[25, 40], gamma=0.25)]
+            scheduler = [torch.optim.lr_scheduler.MultiStepLR(opt, milestones=[50, 100], gamma=0.1)]
         elif self.cfg.TRAIN.USE_SCHEDULER == "reduce_on_plateau":
             scheduler = [{
-                "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(opt_g, mode="min", factor=0.5, patience=2,
+                "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.2, patience=2,
                                                                         cooldown=2,
                                                                         threshold=0.0001, threshold_mode="abs",
                                                                         verbose=True,
@@ -304,6 +323,19 @@ class LandmarkDetection(L.LightningModule):
                 "strict": False,
                 "monitor": "val/l2_scaled",
             }]
+        elif self.cfg.TRAIN.USE_SCHEDULER == "cycle":
+            # You only look once config
+            base_lr = self.cfg.TRAIN.LR
+            max_lr = 0.001
+            step_size_up = 2000
+            step_size_down = 2000
+            mode = 'triangular2'
+            cycle_momentum = False
+            scheduler = torch.optim.lr_scheduler.CyclicLR(
+                opt, base_lr=base_lr, max_lr=max_lr,
+                step_size_up=step_size_up, step_size_down=step_size_down,
+                mode=mode, cycle_momentum=cycle_momentum
+            )
         else:
             scheduler = []
-        return [opt_g], scheduler
+        return [opt], scheduler

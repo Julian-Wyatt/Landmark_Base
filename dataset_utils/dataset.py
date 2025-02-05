@@ -21,6 +21,7 @@ from dataset_utils.preprocessing_utils import normalise, simulate_x_ray_artefact
     create_radial_mask
 
 import lightning as L
+import albumentations as A
 
 
 class LandmarkDataset(Dataset):
@@ -32,6 +33,7 @@ class LandmarkDataset(Dataset):
         self.DATASET_NAME = f"{cfg.DATASET.NAME}/{cfg.DATASET.IMG_SIZE[0]}x{cfg.DATASET.IMG_SIZE[1]}"
         self.root_dir = cfg.DATASET.ROOT_DIR
         self.tensor_device = utils.device.get_device()
+        self.USE_GRAYSCALE = cfg.DATASET.CHANNELS == 1
 
         # if type(cfg.DATASET.LABEL_DIR) is str:
         #     if cfg.DATASET.LABEL_DIR.endswith(".csv"):
@@ -76,34 +78,25 @@ class LandmarkDataset(Dataset):
         self.USE_SKEWED_SCALE_RATE = cfg.AUGMENTATIONS.USE_SKEWED_SCALE_RATE
         self.SIMULATE_XRAY_ARTEFACTS_RATE = cfg.AUGMENTATIONS.SIMULATE_XRAY_ARTEFACTS_RATE
         # augmentations
-        self.transform = iaa.Sequential([
-            iaa.Cutout(nb_iterations=(0, cfg.AUGMENTATIONS.CUTOUT_ITERATIONS),
-                       size=(cfg.AUGMENTATIONS.CUTOUT_SIZE_MIN, cfg.AUGMENTATIONS.CUTOUT_SIZE_MAX),
-                       squared=False,
-                       cval=(0, 255)),
-            iaa.Affine(rotate=(-cfg.AUGMENTATIONS.ROTATION, cfg.AUGMENTATIONS.ROTATION),
-                       # scale=(1 - cfg.AUGMENTATIONS.SCALE, 1 + cfg.AUGMENTATIONS.SCALE),
-                       translate_px={"x": cfg.AUGMENTATIONS.TRANSLATION_X, "y": cfg.AUGMENTATIONS.TRANSLATION_Y},
-                       mode=["reflect", "edge", "constant"],
-                       shear=(-cfg.AUGMENTATIONS.SHEAR, cfg.AUGMENTATIONS.SHEAR)),
-            iaa.Multiply(mul=(1 - cfg.AUGMENTATIONS.MULTIPLY, 1 + cfg.AUGMENTATIONS.MULTIPLY)),
-            iaa.Sometimes(cfg.AUGMENTATIONS.BLUR_RATE, iaa.GaussianBlur(sigma=(0, 1.5))),
-            iaa.GammaContrast((cfg.AUGMENTATIONS.CONTRAST_GAMMA_MIN, cfg.AUGMENTATIONS.CONTRAST_GAMMA_MAX)),
-            iaa.Sharpen(alpha=(cfg.AUGMENTATIONS.SHARPEN_ALPHA_MIN, cfg.AUGMENTATIONS.SHARPEN_ALPHA_MAX),
-                        lightness=(0.75, 1.5)),
-            iaa.ElasticTransformation(alpha=(0, cfg.AUGMENTATIONS.ELASTIC_TRANSFORM_ALPHA),
-                                      sigma=cfg.AUGMENTATIONS.ELASTIC_TRANSFORM_SIGMA, order=3),
-        ], random_order=False)
-        self.low_transform = iaa.Sequential([
-            iaa.Affine(rotate=2,
-                       scale=(0.95, 1.05),
-                       translate_px={"x": [-3, 3], "y": [-3, 3]},
-                       mode="edge", ),
-            iaa.Multiply(mul=(0.65, 1.35)),
-            iaa.GammaContrast((0.5, 2)),
-            iaa.ElasticTransformation(alpha=(0, 250),
-                                      sigma=30, order=3),
-        ], random_order=False)
+
+        self.transform = A.Compose([
+            A.Equalize(p=0.3),
+            A.Erasing(p=0.75, scale=(cfg.AUGMENTATIONS.CUTOUT_SIZE_MIN, cfg.AUGMENTATIONS.CUTOUT_SIZE_MAX)),
+            A.RandomBrightnessContrast(brightness_limit=0.25, contrast_limit=0.25, p=0.3),
+            A.GaussNoise(std_range=(0, 0.1), p=0.2),
+            A.AdvancedBlur(sigma_x_limit=(0.2, 1.0), sigma_y_limit=(0.2, 1.0), p=0.3),
+            A.HorizontalFlip(p=0.5),
+
+            A.Affine(rotate=(-cfg.AUGMENTATIONS.ROTATION, cfg.AUGMENTATIONS.ROTATION),
+                     scale=(1 - cfg.AUGMENTATIONS.SCALE, 1 + cfg.AUGMENTATIONS.SCALE),
+                     translate_px={"x": cfg.AUGMENTATIONS.TRANSLATION_X, "y": cfg.AUGMENTATIONS.TRANSLATION_Y},
+                     p=0.9),
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),
+            # A.ElasticTransform(alpha=70, sigma=30,
+            #                    p=1,
+            #                    keypoint_remapping_method="direct"
+            #                    )
+        ], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
 
         self.coarse_dropout = iaa.CoarseDropout(0.02, size_percent=0.08)
         self.addative_gaussian_noise = iaa.AdditiveGaussianNoise(scale=(0, cfg.AUGMENTATIONS.GAUSSIAN_NOISE * 255))
@@ -192,13 +185,21 @@ class LandmarkDataset(Dataset):
 
         # load data
         if self.store_in_ram and idx not in self.ram:
-            img = cv2.imread(image_name, cv2.IMREAD_GRAYSCALE)
+            if self.USE_GRAYSCALE:
+                img = cv2.imread(image_name, cv2.IMREAD_GRAYSCALE)
+            else:
+                img = cv2.imread(image_name)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             # img = io.imread(image_name, as_gray=True)
             self.ram[idx] = img
         elif self.store_in_ram:
             img = self.ram[idx]
         else:
-            img = cv2.imread(image_name, cv2.IMREAD_GRAYSCALE)
+            if self.USE_GRAYSCALE:
+                img = cv2.imread(image_name, cv2.IMREAD_GRAYSCALE)
+            else:
+                img = cv2.imread(image_name)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         img = img.astype(np.uint8)
         landmarks = np.loadtxt(annotation_file, delimiter=",", max_rows=self.total_landmarks)
@@ -211,61 +212,39 @@ class LandmarkDataset(Dataset):
         kps = KeypointsOnImage.from_xy_array(landmarks, shape=img.shape)
 
         # plot keypoints over image for testing
-
         img, kps = self.resize(image=img, keypoints=kps)
+        kps = kps.to_xy_array().reshape(-1, 2)
 
         if self.augment:
-
-            # img_aug_colour = self.invert_transform(image=img)
-            # img_aug_colour = colour_augmentation(img_aug_colour)
             if random.random() < self.SIMULATE_XRAY_ARTEFACTS_RATE:
                 img = simulate_x_ray_artefacts(img)
 
-            img_aug, kps_aug = img, kps
-            use_skewed_scaled = random.random() < self.USE_SKEWED_SCALE_RATE
-
-            for i in range(5):
-                img_aug, kps_aug = self.transform(image=img, keypoints=kps)
-                if use_skewed_scaled:
-                    img_aug, kps_aug = self.scale_transform_skew(image=img_aug, keypoints=kps_aug)
-                else:
-                    img_aug, kps_aug = self.scale_transform(image=img_aug, keypoints=kps_aug)
-                if any([kp.x < 0 or kp.x >= img.shape[1] or kp.y < 0 or kp.y >= img.shape[0] for kp in
-                        kps_aug.keypoints]):
-
-                    if i == 4:
-                        # print(image_name, "lower augs")
-                        # plt.imshow(img_aug)
-                        # plt.scatter(kps_aug.to_xy_array()[:, 0], kps_aug.to_xy_array()[:, 1], c='r', s=2)
-                        # plt.title("outside augs")
-                        # plt.show()
-                        img_aug, kps_aug = self.low_transform(image=img, keypoints=kps)
-                        # plt.imshow(img_aug)
-                        # plt.scatter(kps_aug.to_xy_array()[:, 0], kps_aug.to_xy_array()[:, 1], c='r', s=2)
-                        # plt.title("low augs")
-                        # plt.show()
-                        break
-                    continue
-                else:
-                    break
+            transformed_data = self.transform(image=img, keypoints=kps)
+            img_aug = transformed_data['image']
+            kps_aug = transformed_data['keypoints']
 
             img, kps = img_aug, kps_aug
-        landmarks = kps.to_xy_array().reshape(-1, 2)
-        landmarks = np.flip(landmarks, axis=-1).astype(np.float32)
+
+            # if kps_aug.shape[0] != self.total_landmarks:
+            #     plt.imshow(img_aug, cmap="gray")
+            #     plt.scatter(kps_aug[:, 0], kps_aug[:, 1], c='r', s=2)
+            #     # plt.title(f"Image {batch['name'][0]}")
+            #     plt.show()
+
+        kps = np.flip(kps, axis=-1).astype(np.float32)
 
         img = self.img_int_to_float(img)
         img = self.normalise(img, method=self.cfg_NORMALISATION_METHOD)
         img = img.astype(np.float32)
-        output = {"x": img, "y": landmarks, "name": f"{image_name.split('/')[-1].split('.')[0].split('_')[0]}"}
+        output = {"x": img, "y": kps, "name": f"{image_name.split('/')[-1].split('.')[0].split('_')[0]}"}
         if len(output["x"].shape) == 2:
             output["x"] = np.expand_dims(output["x"], axis=0)
 
-        landmarks_rounded = np.round(landmarks).astype(int)
+        landmarks_rounded = np.round(kps).astype(int)
 
         if self.cfg_BCE_weight > 0:
             output["y_img_radial"] = create_radial_mask(landmarks_rounded, img.shape, self.dataset_pixels_per_mm,
                                                         radius=self.RADIUS)
-
         output["y_img_initial"] = create_landmark_image(
             landmarks_rounded,
             img.shape,
@@ -327,29 +306,33 @@ def main():
 
     cfg = config.get_config("configs/local_test_ceph_MICCAI24.yaml")
     # cfg = config.get_config("configs/example_config.yaml")
-
+    cfg.AUGMENTATIONS.CUTOUT_SIZE_MAX = 0.2
     cfg.DATASET.USE_GAUSSIAN_GT = True
     cfg.DATASET.GT_SIGMA = 1
+    cfg.DATASET.CHANNELS = 3
 
-    train_loader = LandmarkDataset.get_loaders(cfg, 4, 2, True, partition="training", shuffle=True)
+    train_loader = LandmarkDataset.get_loaders(cfg, 8, 2, True, partition="training", shuffle=True)
     # train_loader = LandmarkDataset.get_loaders(cfg, 1, 1, False, partition="validation", shuffle=False)
     # train_loader = LandmarkDataset.get_loaders(cfg, 1, 1, False, partition="testing", shuffle=True)
     start = time.time()
 
     for b, batch in enumerate(train_loader):
-        print(batch.keys())
+        # print(batch.keys())
         pass
         x = batch["x"]
+        print(batch["y"].shape)
         # print(x.min(), x.max(), x.float().mean(), x.float().std(), x.dtype, batch['name'])
         # if batch["name"][0] == "454":
         # for k in batch.keys():
         #     if k != "name":
         #         print(k, batch[k].shape, batch[k].dtype)
-        plt.imshow((renormalise(x[0, 0], True)).clamp(0, 255).long().cpu().numpy())
+        plt.imshow((renormalise(x[0], True)).clamp(0, 255).long().cpu().numpy())
         plt.scatter(batch["y"][0, :, 1], batch["y"][0, :, 0], c='r', s=2)
         plt.title(f"Image {batch['name'][0]}")
         plt.show()
-
+        #
+        # if b > 8:
+        #     break
     print(time.time() - start)
 
 

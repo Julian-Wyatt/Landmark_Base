@@ -197,6 +197,37 @@ def MICCAI2024(dir=""):
     landmarks_df.to_csv(f"{dir}/Training Set/labels_fix_v2.csv", index=False)
 
 
+def visualise_cached_data(cfg: Config, show_landmark_numbers=False, show_landmark_points=True):
+    # plot landmark numbers over each image in dataset
+    # save images in a temp vis folder
+    vis_dir = f"{cfg.DATASET.CACHE_DIR}/{cfg.DATASET.NAME}/{cfg.DATASET.IMG_SIZE[0]}x{cfg.DATASET.IMG_SIZE[1]}/vis"
+    if not os.path.exists(vis_dir):
+        os.makedirs(vis_dir)
+
+    for i in tqdm(glob.glob(
+            f"{cfg.DATASET.CACHE_DIR}/{cfg.DATASET.NAME}/{cfg.DATASET.IMG_SIZE[0]}x{cfg.DATASET.IMG_SIZE[1]}/*_meta.json")):
+        with open(i, "r") as f:
+            meta = json.load(f)
+        image = cv2.imread(
+            f"{cfg.DATASET.CACHE_DIR}/{cfg.DATASET.NAME}/{cfg.DATASET.IMG_SIZE[0]}x{cfg.DATASET.IMG_SIZE[1]}/{meta['filename']}.png")
+        landmarks = np.loadtxt(
+            f"{cfg.DATASET.CACHE_DIR}/{cfg.DATASET.NAME}/{cfg.DATASET.IMG_SIZE[0]}x{cfg.DATASET.IMG_SIZE[1]}/{meta['filename']}_annotations.txt",
+            delimiter=",")
+
+        if show_landmark_numbers:
+            for j in range(0, landmarks.shape[0]):
+                cv2.putText(image, str(j + 1), (int(landmarks[j, 0]), int(landmarks[j, 1])),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1,
+                            (0, 0, 255), 2, cv2.LINE_AA)
+        if show_landmark_points:
+            for j in range(0, landmarks.shape[0]):
+                cv2.circle(image, (int(landmarks[j, 0]), int(landmarks[j, 1])), 2, (255, 0, 0), -1)
+        # plt.imshow(image)
+        # plt.show()
+        # break
+        cv2.imwrite(f"{vis_dir}/{meta['filename']}.png", image)
+
+
 def visualiseLandmarksOverDataset(image_dir, landmark_file, show_landmark_numbers=False, show_landmark_points=True):
     # plot landmark numbers over each image in dataset
     # save images in a temp vis folder
@@ -229,12 +260,14 @@ def main(config_file=""):
 
 
 if __name__ == "__main__":
+    visualise_cached_data(config.get_config(
+        "/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAI24.yaml"))
     # main("/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAI24.yaml")
     # main("/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAIAdoAdu24.yaml")
     pass
     # CephAdoAdu("/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/CephAdoAdu Dataset")
     # MICCAI2024(
     #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge")
-    visualiseLandmarksOverDataset(
-        "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/images",
-        "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/labels_fix_v2.csv")
+    # visualiseLandmarksOverDataset(
+    #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/images",
+    #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/labels_fix_v2.csv")

@@ -34,14 +34,11 @@ class Dataset(SubConfig):
 
         # Image-related attributes
         self.NUMBER_KEY_POINTS = 0
-        self.IMG_CHANNELS = 1
+        self.CHANNELS = 3
         self.PIXELS_PER_MM = [1, 1]
         self.IMG_SIZE = [128, 128]
 
-        self.GT_SIGMA = 0
-        # 0 is randomly select one annotator
-        # 1 is random linear combination between landmark annotations
-        # 2 is random gaussian jitter around the mean of the annotations
+        self.GT_SIGMA = 1
 
         # Training-related attributes
         self.AUGMENT_TRAIN = True
@@ -149,7 +146,7 @@ class Train(SubConfig):
         self.RUN_TRAIN = True
         self.LOG_TEST_METRICS = True
         self.CHECKPOINT_FILE = ""
-        self.TOP_K_HOTTEST_POINTS = 1
+        self.TOP_K_HOTTEST_POINTS = 10
 
         self.VAL_EVERY_N_EPOCHS = 20
 

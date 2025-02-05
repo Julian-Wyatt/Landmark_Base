@@ -95,7 +95,12 @@ def get_coordinates_from_heatmap(heatmap: torch.tensor, k=1, threshold=0.5):
 def create_landmark_image(landmarks, img_size, use_gaussian=False, sigma=None):
     """Convert coordinates to image with landmarks as neighbourhoods around the coordinates"""
     c, d = landmarks.shape
-    h, w = img_size
+    if len(img_size) == 2:
+        h, w = img_size
+    elif len(img_size) == 3:
+        h, w, _ = img_size
+    else:
+        raise ValueError("img_size must be a tuple of length 2 or 3")
     landmark_img = np.zeros((c, h, w), dtype=np.float32)
     if sigma is None:
         sigma = np.ones(c) * 1.0
