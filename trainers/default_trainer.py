@@ -17,6 +17,7 @@ import lightning as L
 from dataset_utils.preprocessing_utils import get_coordinates_from_heatmap
 from dataset_utils.visualisations import plot_heatmaps, plot_heatmaps_and_landmarks_over_img
 from utils import metrics
+from utils.ema import LitEma
 from utils.logging import LogWrapper
 from utils.metrics import evaluate_landmark_detection, euclidean_distance
 
@@ -43,6 +44,10 @@ class LandmarkDetection(L.LightningModule):
         self.do_img_logging = cfg.TRAIN.LOG_IMAGE
         self.image_size = cfg.DATASET.IMG_SIZE
         self.use_ema = use_ema
+
+        if self.use_ema:
+            self.model_ema = LitEma(self.model, decay=0.9999)
+            print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
         self.log_wrapper = None
 
@@ -209,8 +214,8 @@ class LandmarkDetection(L.LightningModule):
             output_str += f" - Val L2: {self.trainer.callback_metrics['val/l2']:0.4f}"
         print(output_str)
 
-        # if self.current_epoch % 10 == 0:
-        #     self.model_ema.copy_to(self.model)
+        if self.current_epoch % 10 == 0 and self.use_ema:
+            self.model_ema.copy_to(self.model)
         # imgaug.seed(np.random.randint(0, 100000))
 
     # @abc.abstractmethod
@@ -236,11 +241,12 @@ class LandmarkDetection(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         self.batch_idx = batch_idx
         _, loss_dict_no_ema, output = self.shared_step(batch)
-        with self.ema_scope():
-            _, loss_dict_ema, output = self.shared_step(batch)
-            loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
-        # self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        if self.use_ema:
+            with self.ema_scope():
+                _, loss_dict_ema, output = self.shared_step(batch)
+                loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
+            # self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+            self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
         img_log = self.output_to_img_log(output, batch, batch_idx)
         if img_log is None:
@@ -261,6 +267,7 @@ class LandmarkDetection(L.LightningModule):
     def unique_test_step(self, batch, batch_idx):
         query_image = self.get_input(batch, "x")
         landmarks = batch["y"]
+
         with self.ema_scope():
             output = self(query_image)
 
@@ -291,9 +298,8 @@ class LandmarkDetection(L.LightningModule):
             self.model_ema(self.model)
 
     def on_save_checkpoint(self, checkpoint):
-        if self.use_ema:
-            with self.ema_scope():
-                checkpoint['state_dict'] = self.state_dict()
+        with self.ema_scope():
+            checkpoint['state_dict'] = self.state_dict()
 
     def configure_optimizers(self):
         if self.cfg.TRAIN.OPTIMISER.lower() == "adam":

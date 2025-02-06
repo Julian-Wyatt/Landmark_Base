@@ -17,6 +17,7 @@ import imgaug.augmenters as iaa
 import utils.device
 from core import config
 from core.config import Config
+from dataset_utils.dataset_caching import cache_data
 from dataset_utils.preprocessing_utils import normalise, simulate_x_ray_artefacts, create_landmark_image, renormalise, \
     create_radial_mask
 
@@ -79,18 +80,30 @@ class LandmarkDataset(Dataset):
         self.SIMULATE_XRAY_ARTEFACTS_RATE = cfg.AUGMENTATIONS.SIMULATE_XRAY_ARTEFACTS_RATE
         # augmentations
 
+        # self.affine = A.Compose(
+        #     [A.Rotate(limit=cfg.AUGMENTATIONS.ROTATION, p=0.4),
+        #      A.Affine(  # rotate=(-cfg.AUGMENTATIONS.ROTATION * 2, cfg.AUGMENTATIONS.ROTATION * 2),
+        #          scale=(1 - cfg.AUGMENTATIONS.SCALE, 1 + cfg.AUGMENTATIONS.SCALE),
+        #          translate_px={"x": cfg.AUGMENTATIONS.TRANSLATION_X,
+        #                        "y": cfg.AUGMENTATIONS.TRANSLATION_Y},
+        #          p=0.9)], keypoint_params=A.KeypointParams(format='xy', remove_invisible=False))
         self.transform = A.Compose([
-            A.Equalize(p=0.3),
+
+            # A.Rotate(limit=cfg.AUGMENTATIONS.ROTATION, p=0.4),
+            A.Affine(rotate=(-cfg.AUGMENTATIONS.ROTATION, cfg.AUGMENTATIONS.ROTATION),
+                     scale=(1 - cfg.AUGMENTATIONS.SCALE, 1 + cfg.AUGMENTATIONS.SCALE),
+                     translate_px={"x": cfg.AUGMENTATIONS.TRANSLATION_X,
+                                   "y": cfg.AUGMENTATIONS.TRANSLATION_Y},
+                     p=0.5),
             A.Erasing(p=0.75, scale=(cfg.AUGMENTATIONS.CUTOUT_SIZE_MIN, cfg.AUGMENTATIONS.CUTOUT_SIZE_MAX)),
+
+            A.Equalize(p=0.3),
+
             A.RandomBrightnessContrast(brightness_limit=0.25, contrast_limit=0.25, p=0.3),
             A.GaussNoise(std_range=(0, 0.1), p=0.2),
             A.AdvancedBlur(sigma_x_limit=(0.2, 1.0), sigma_y_limit=(0.2, 1.0), p=0.3),
             A.HorizontalFlip(p=0.5),
 
-            A.Affine(rotate=(-cfg.AUGMENTATIONS.ROTATION, cfg.AUGMENTATIONS.ROTATION),
-                     scale=(1 - cfg.AUGMENTATIONS.SCALE, 1 + cfg.AUGMENTATIONS.SCALE),
-                     translate_px={"x": cfg.AUGMENTATIONS.TRANSLATION_X, "y": cfg.AUGMENTATIONS.TRANSLATION_Y},
-                     p=0.9),
             A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),
             # A.ElasticTransform(alpha=70, sigma=30,
             #                    p=1,
@@ -118,7 +131,7 @@ class LandmarkDataset(Dataset):
 
         self.resize = iaa.Sequential([
             iaa.PadToAspectRatio(cfg.DATASET.IMG_SIZE[1] / cfg.DATASET.IMG_SIZE[0],
-                                 position="uniform" if self.partition == "training" else "right-bottom"),
+                                 position="uniform" if self.augment else "right-bottom"),
             iaa.Resize({"height": cfg.DATASET.IMG_SIZE[0], "width": cfg.DATASET.IMG_SIZE[1]})
         ])
 
@@ -305,13 +318,18 @@ def main():
     plt.rcParams["figure.dpi"] = 200
 
     cfg = config.get_config("configs/local_test_ceph_MICCAI24.yaml")
+    cfg.DATASET.IMG_SIZE = (448, 448)
     # cfg = config.get_config("configs/example_config.yaml")
-    cfg.AUGMENTATIONS.CUTOUT_SIZE_MAX = 0.2
+    cfg.AUGMENTATIONS.CUTOUT_SIZE_MAX = 0.1
     cfg.DATASET.USE_GAUSSIAN_GT = True
+    cfg.AUGMENTATIONS.ROTATION = 10
+    cfg.AUGMENTATIONS.SCALE = 0.15
     cfg.DATASET.GT_SIGMA = 1
     cfg.DATASET.CHANNELS = 3
 
-    train_loader = LandmarkDataset.get_loaders(cfg, 8, 2, True, partition="training", shuffle=True)
+    cache_data(cfg)
+
+    train_loader = LandmarkDataset.get_loaders(cfg, 8, 0, True, partition="training", shuffle=True)
     # train_loader = LandmarkDataset.get_loaders(cfg, 1, 1, False, partition="validation", shuffle=False)
     # train_loader = LandmarkDataset.get_loaders(cfg, 1, 1, False, partition="testing", shuffle=True)
     start = time.time()
@@ -320,7 +338,7 @@ def main():
         # print(batch.keys())
         pass
         x = batch["x"]
-        print(batch["y"].shape)
+        # print(batch["pixel_size"], batch["scale_factor"], batch["pixel_per_mm"])
         # print(x.min(), x.max(), x.float().mean(), x.float().std(), x.dtype, batch['name'])
         # if batch["name"][0] == "454":
         # for k in batch.keys():
@@ -330,9 +348,9 @@ def main():
         plt.scatter(batch["y"][0, :, 1], batch["y"][0, :, 0], c='r', s=2)
         plt.title(f"Image {batch['name'][0]}")
         plt.show()
-        #
-        # if b > 8:
-        #     break
+
+        if b > 8:
+            break
     print(time.time() - start)
 
 

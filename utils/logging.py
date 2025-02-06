@@ -144,17 +144,17 @@ class LogWrapper:
                                                              pixel_sizes=batch["pixel_size"],
                                                              top_k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS)
 
-            if batch["landmarks_per_annotator"].shape[1] > 1:
-
-                for annotator in range(batch["landmarks_per_annotator"].shape[1]):
-                    annotations = batch["landmarks_per_annotator"][:, annotator, :, :]
-                    log_annotator = metrics.evaluate_landmark_detection(img_log["heatmaps"], annotations,
-                                                                        pixel_sizes=batch["pixel_size"],
-                                                                        top_k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS)
-                    self.log(f"test/l2_annotator_{annotator}", np.mean(log_annotator["l2"]), prog_bar=False,
-                             logger=True,
-                             on_step=False, on_epoch=True)
-                    self.test_coordinates_errors[f"l2_scaled_annotator_{annotator}"].append(log_annotator["l2"])
+            # if batch["landmarks_per_annotator"].shape[1] > 1:
+            #
+            #     for annotator in range(batch["landmarks_per_annotator"].shape[1]):
+            #         annotations = batch["landmarks_per_annotator"][:, annotator, :, :]
+            #         log_annotator = metrics.evaluate_landmark_detection(img_log["heatmaps"], annotations,
+            #                                                             pixel_sizes=batch["pixel_size"],
+            #                                                             top_k=self.cfg.TRAIN.TOP_K_HOTTEST_POINTS)
+            #         self.log(f"test/l2_annotator_{annotator}", np.mean(log_annotator["l2"]), prog_bar=False,
+            #                  logger=True,
+            #                  on_step=False, on_epoch=True)
+            #         self.test_coordinates_errors[f"l2_scaled_annotator_{annotator}"].append(log_annotator["l2"])
 
             # if not os.path.exists(f"{self.cfg.TRAIN.SAVING_ROOT_DIR}/tmp/{self.logger.experiment.id}"):
             #     os.makedirs(f"{self.cfg.TRAIN.SAVING_ROOT_DIR}/tmp/{self.logger.experiment.id}")
