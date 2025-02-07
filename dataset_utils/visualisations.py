@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from einops import rearrange
 from matplotlib import pyplot as plt
 import matplotlib.colors as mcolors
 
@@ -100,3 +101,59 @@ def plot_heatmaps_and_landmarks_over_img(img, heatmaps, ground_truths, return_as
         plt.clf()
         return data
     return fig
+
+
+def plot_landmarks_from_img(img: torch.tensor, landmarks: torch.tensor, true_landmark=None, plot=False):
+    """
+    Plot landmarks and ground truth landmarks onto query image given image coordinates
+    """
+    landmarks = get_coordinates_from_heatmap(landmarks)
+    if true_landmark is not None:
+        true_landmark = get_coordinates_from_heatmap(true_landmark)
+    return plot_landmarks(img, landmarks, plot=plot, true_landmark=true_landmark)
+
+
+def plot_landmarks(img: torch.tensor, landmarks: torch.tensor, true_landmark=None, plot=False):
+    """
+    Plot landmarks and ground truth landmarks onto query image
+    """
+    import cv2
+    # if img.min() < 0:
+    # img = renormalise(img).to(torch.uint8)
+    img = img.to("cpu")
+    landmarks = landmarks.to("cpu")
+    if true_landmark is not None:
+        true_landmark = true_landmark.to("cpu")
+
+    # img should be B x C x H x W
+
+    if len(img.shape) == 3:
+        img = img.reshape(img.shape[0], 1, img.shape[1], img.shape[2])
+    if img.shape[-1] in [1, 3]:
+        img = rearrange(img, 'b h w c -> b c h w')
+    img = img.permute(0, 2, 3, 1).clip(0, 255).numpy().astype(np.uint8)
+    output_img = np.zeros((img.shape[0], img.shape[1], img.shape[2], 3))
+    for i in range(img.shape[0]):
+        if img.shape[3] == 1:
+            img_color = cv2.cvtColor(img[i], cv2.COLOR_GRAY2BGR)
+        else:
+            img_color = img[i].copy()
+        if true_landmark is not None:
+            for landmark in true_landmark[i]:
+                if landmark[0] < 0 or landmark[1] < 0 or landmark[1] >= img.shape[1] or landmark[0] >= img.shape[2] or \
+                        torch.isnan(landmark[0]) or torch.isnan(landmark[1]):
+                    continue
+                cv2.circle(img_color, (int(landmark[0]), int(landmark[1])), 2, (0, 255, 0), -1)
+
+        for landmark in landmarks[i]:
+            if landmark[0] < 0 or landmark[1] < 0 or landmark[1] >= img.shape[1] or landmark[0] >= img.shape[2] or \
+                    torch.isnan(landmark[0]) or torch.isnan(landmark[1]):
+                continue
+            cv2.circle(img_color, (int(landmark[0]), int(landmark[1])), 2, (0, 0, 255), -1)
+
+        if plot:
+            plt.imshow(img_color.astype(np.uint8))
+            plt.show()
+
+        output_img[i] = img_color
+    return torch.tensor(output_img).permute(0, 3, 1, 2)

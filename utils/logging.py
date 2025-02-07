@@ -262,9 +262,10 @@ class LogWrapper:
 
         for error in ['l2_scaled']:
             print_sdr_stats(error, errors_dict[error])
-        sdr_stats = success_detection_rates(errors_dict["l2_scaled"].flatten(), [2.0, 2.5, 3.0, 4.0])
-        for i, dist in enumerate([2, 2.5, 3, 4]):
-            self.log(f"test/sdr/{dist}", sdr_stats[i])
+        pixel_sizes = [1, 1.5, 2.0, 2.5, 3.0, 4.0]
+        sdr_stats = success_detection_rates(errors_dict["l2_scaled"].flatten(), pixel_sizes)
+        for i, dist in enumerate(pixel_sizes):
+            self.log(f"test/sdr-{dist}", sdr_stats[i])
 
         print("-----------------------------------")
 

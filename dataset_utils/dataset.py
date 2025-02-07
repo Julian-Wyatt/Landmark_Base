@@ -8,7 +8,8 @@ import cv2
 import numpy as np
 import pandas as pd
 import skimage
-from einops import rearrange
+import torch
+from einops import rearrange, reduce
 from imgaug import KeypointsOnImage
 from matplotlib import pyplot as plt
 from torch.utils.data import Dataset, DataLoader
@@ -23,6 +24,8 @@ from dataset_utils.preprocessing_utils import normalise, simulate_x_ray_artefact
 
 import lightning as L
 import albumentations as A
+
+from dataset_utils.visualisations import plot_landmarks_from_img
 
 
 class LandmarkDataset(Dataset):
@@ -255,14 +258,17 @@ class LandmarkDataset(Dataset):
 
         landmarks_rounded = np.round(kps).astype(int)
 
-        if self.cfg_BCE_weight > 0:
-            output["y_img_radial"] = create_radial_mask(landmarks_rounded, img.shape, self.dataset_pixels_per_mm,
-                                                        radius=self.RADIUS)
+        # if self.cfg_BCE_weight > 0:
+        #     output["y_img_radial"] = create_radial_mask(landmarks_rounded, img.shape, self.dataset_pixels_per_mm,
+        #                                                 radius=self.RADIUS)
         output["y_img_initial"] = create_landmark_image(
             landmarks_rounded,
             img.shape,
             use_gaussian=self.USE_GAUSSIAN,
             sigma=self.SIGMAS)
+
+        if self.cfg_BCE_weight > 0:
+            output["y_img_radial"] = output["y_img_initial"]
         output["y_img"] = output["y_img_initial"]
         output["pixel_per_mm"] = np.array([metas["pixels_per_mm"], metas["pixels_per_mm"]], dtype=np.float32)
         output["pixel_size"] = (np.array([metas["pixels_per_mm"], metas["pixels_per_mm"]], dtype=np.float32) *
@@ -344,10 +350,11 @@ def main():
         # for k in batch.keys():
         #     if k != "name":
         #         print(k, batch[k].shape, batch[k].dtype)
-        plt.imshow((renormalise(x[0], True)).clamp(0, 255).long().cpu().numpy())
-        plt.scatter(batch["y"][0, :, 1], batch["y"][0, :, 0], c='r', s=2)
-        plt.title(f"Image {batch['name'][0]}")
-        plt.show()
+        plot_landmarks_from_img(x, batch["y_img_initial"], batch["y_img_initial"], plot=True)
+        # plt.imshow((renormalise(x[0], True)).clamp(0, 255).long().cpu().numpy())
+        # plt.scatter(batch["y"][0, :, 1], batch["y"][0, :, 0], c='r', s=2)
+        # plt.title(f"Image {batch['name'][0]}")
+        # plt.show()
 
         if b > 8:
             break

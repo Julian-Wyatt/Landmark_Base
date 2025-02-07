@@ -6,16 +6,17 @@ from collections import defaultdict
 from typing import Any
 
 import numpy as np
-from einops import rearrange
+from einops import rearrange, reduce
 from matplotlib import pyplot as plt
+from torchvision.utils import make_grid
 
 from core import config
 from contextlib import contextmanager
 import torch
 import lightning as L
 
-from dataset_utils.preprocessing_utils import get_coordinates_from_heatmap
-from dataset_utils.visualisations import plot_heatmaps, plot_heatmaps_and_landmarks_over_img
+from dataset_utils.preprocessing_utils import get_coordinates_from_heatmap, renormalise
+from dataset_utils.visualisations import plot_heatmaps, plot_heatmaps_and_landmarks_over_img, plot_landmarks_from_img
 from utils import metrics
 from utils.ema import LitEma
 from utils.logging import LogWrapper
@@ -26,12 +27,19 @@ def two_d_softmax(x):
     return torch.softmax(x.flatten(2), dim=-1).view_as(x)
 
 
+def scale_heatmap_for_plotting(heatmap):
+    scale_factor = torch.amax(heatmap, dim=(2, 3), keepdim=True)
+    softmax_output = reduce(heatmap / scale_factor * 255, "b c h w -> b 1 h w",
+                            "max")
+    return softmax_output, scale_factor
+
+
 class LandmarkDetection(L.LightningModule):
     # Landmark Detection Parent Class
     cfg: config.Config
     batch_idx: int
 
-    def __init__(self, cfg: config.Config, use_ema=False):
+    def __init__(self, cfg: config.Config, use_ema=True):
         super(LandmarkDetection, self).__init__()
         self.cfg = cfg
         self.batch_idx = 0
@@ -45,11 +53,21 @@ class LandmarkDetection(L.LightningModule):
         self.image_size = cfg.DATASET.IMG_SIZE
         self.use_ema = use_ema
 
+        self.build_model()
+
         if self.use_ema:
             self.model_ema = LitEma(self.model, decay=0.9999)
             print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
         self.log_wrapper = None
+        self.BCELoss = torch.nn.BCELoss(reduction='sum')
+
+        self.log_train_img_frequency = 10
+        self.batch_to_log = 0
+
+    @abc.abstractmethod
+    def build_model(self):
+        raise NotImplementedError("Please implement build_model method in child class")
 
     def transfer_batch_to_device(self, batch: Any, device: torch.device, dataloader_idx: int) -> Any:
         batch["x"] = batch["x"].to(device, non_blocking=True)
@@ -106,9 +124,6 @@ class LandmarkDetection(L.LightningModule):
         return x
 
     def get_landmark_input(self, batch):
-        # return dataset.create_landmark_image(batch["y"], self.image_size,
-        #                                      eps_window_size=self.cfg.DATASET.LANDMARK_POINT_EPSILON,
-        #                                      device=self.device)
         return batch["y_img"].to(self.device)
 
     @abc.abstractmethod
@@ -117,7 +132,7 @@ class LandmarkDetection(L.LightningModule):
         # forward should return model output pre activation
         pass
 
-    def calculate_loss(self, output, batch):
+    def calculate_loss(self, output, batch, image):
         # calculate loss here
         loss_dict = dict()
         log_prefix = "train" if self.training else "val"
@@ -131,18 +146,18 @@ class LandmarkDetection(L.LightningModule):
             raise NotImplementedError(
                 "Cannot use both NLL and BCE loss simultaneously - To create separate final head for NLL and BCE")
 
+        elif self.cfg.TRAINLOSSES.BCE_WEIGHT > 0:
+            activated_heatmap = torch.nn.functional.sigmoid(output)
+            bce = torch.nn.functional.binary_cross_entropy_with_logits(output, batch["y_img_radial"], reduction='sum')
+            loss_dict.update({f'{log_prefix}/combined_bce': bce.item()})
+            loss += bce * self.cfg.TRAINLOSSES.BCE_WEIGHT
+
         elif self.cfg.TRAINLOSSES.NLL_WEIGHT > 0:
             activated_heatmap = two_d_softmax(output)
             nll = -batch["y_img"] * torch.log(activated_heatmap)
             nll = torch.mean(torch.sum(nll, dim=(2, 3)))
-            loss_dict.update({f'{log_prefix}/combined_nll': nll.detach().item()})
+            loss_dict.update({f'{log_prefix}/combined_nll': nll.item()})
             loss += nll * self.cfg.TRAINLOSSES.NLL_WEIGHT
-        elif self.cfg.TRAINLOSSES.BCE_WEIGHT > 0:
-            activated_heatmap = torch.nn.functional.sigmoid(output)
-            bce = torch.nn.functional.binary_cross_entropy_with_logits(activated_heatmap,
-                                                                       batch["y_img_radial"])
-            loss_dict.update({f'{log_prefix}/combined_bce': bce.detach().item()})
-            loss += bce * self.cfg.TRAINLOSSES.BCE_WEIGHT
         else:
             raise ValueError("No loss function specified")
 
@@ -161,9 +176,56 @@ class LandmarkDetection(L.LightningModule):
             # LOG EXAMPLE IMAGE
 
             if self.do_img_logging:
-                pass
+
+                if self.batch_idx == self.batch_to_log and self.current_epoch % self.log_train_img_frequency == 0 or (
+                        not self.training and self.batch_idx == self.batch_to_log):
+                    # if chosen_class == 0:
+                    #     gt = gt_fake
+                    # else:
+                    #     gt = gt_real
+                    with torch.no_grad():
+                        # log training samples
+                        # log predictions w/ gt, heatmap, heatmap for channel 15, gt for channel 15
+                        heatmap_prediction_renorm = activated_heatmap
+                        softmax_output, scale_factor = scale_heatmap_for_plotting(heatmap_prediction_renorm)
+
+                        img_pred_log = [
+                            plot_landmarks_from_img(renormalise(image, method=self.cfg.DATASET.NORMALISATION),
+                                                    heatmap_prediction_renorm,
+                                                    true_landmark=batch["y_img_initial"]).cpu().int(),
+                            softmax_output.repeat(1, 3, 1, 1).cpu()]
+                        random_channel = np.random.randint(0, heatmap_prediction_renorm.shape[1] - 1)
+                        img_pred_log.append(
+                            (heatmap_prediction_renorm[:, random_channel] / heatmap_prediction_renorm[:,
+                                                                            random_channel].max() * 240).unsqueeze(
+                                1)
+                            .repeat(1, 3, 1, 1).cpu()
+                        )
+                        # img_pred_log.append(
+                        #     (batch["y_img"][:, random_channel] * 255).clamp(0, 255).unsqueeze(1).repeat(1, 3, 1,
+                        #                                                                                 1).cpu()
+                        # )
+
+                        img_pred_log = self._get_rows_from_list(torch.stack(img_pred_log))
+
+                        try:
+
+                            self.logger.log_image(key=f"Media/{log_prefix}/predictions",
+                                                  caption=[
+                                                      f"Images {batch['name']} step pixel mre {l2_coordinate_prediction.item():.4f} step mm mre {l2_coordinate_prediction_scaled.item():.4f} scaled by {scale_factor.min().item():.2f}, {scale_factor.max().item():.2f}, {scale_factor.mean().item():.2f}, {scale_factor.std().item():.2f}"],
+                                                  images=[img_pred_log])
+                        except OSError as e:
+                            print(e)
+                        del scale_factor, img_pred_log
 
         return loss, loss_dict, activated_heatmap
+
+    def _get_rows_from_list(self, samples):
+        n_imgs_per_row = len(samples)
+        grid = rearrange(samples, 'n b c h w -> b n c h w')
+        grid = rearrange(grid, 'b n c h w -> (b n) c h w')
+        denoise_grid = make_grid(grid, nrow=n_imgs_per_row)
+        return denoise_grid
 
     def shared_step(self, batch):
         # image is batch["x"], landmark coordinates are batch["y"]
@@ -171,7 +233,7 @@ class LandmarkDetection(L.LightningModule):
         image = self.get_input(batch, "x")
 
         output = self(image)
-        loss, loss_dict, activated_output = self.calculate_loss(output, batch)
+        loss, loss_dict, activated_output = self.calculate_loss(output, batch, image)
 
         self.log_dict(loss_dict, prog_bar=False, logger=True, on_step=True, on_epoch=True)
 
@@ -193,6 +255,13 @@ class LandmarkDetection(L.LightningModule):
     def on_validation_start(self) -> None:
         if self.log_wrapper is None:
             self.log_wrapper = LogWrapper(self.cfg, self.logger, lambda x, y, **kwargs: self.log(x, y, **kwargs))
+
+    def on_validation_epoch_end(self):
+        # Log the learning rate.
+        if self.cfg.TRAIN.USE_SCHEDULER != "":
+            lr = self.trainer.lr_scheduler_configs[0].scheduler.get_last_lr()[0]
+            self.log('learning_rate', lr, on_epoch=True, on_step=False, prog_bar=False)
+
 
     def on_train_start(self) -> None:
         if self.log_wrapper is None:
@@ -216,6 +285,9 @@ class LandmarkDetection(L.LightningModule):
 
         if self.current_epoch % 10 == 0 and self.use_ema:
             self.model_ema.copy_to(self.model)
+
+        if self.current_epoch % self.log_train_img_frequency == 0:
+            self.batch_to_log = np.random.randint(0, self.trainer.num_training_batches)
         # imgaug.seed(np.random.randint(0, 100000))
 
     # @abc.abstractmethod

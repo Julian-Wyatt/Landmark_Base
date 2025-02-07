@@ -95,12 +95,8 @@ def get_coordinates_from_heatmap(heatmap: torch.tensor, k=1, threshold=0.5):
 def create_landmark_image(landmarks, img_size, use_gaussian=False, sigma=None):
     """Convert coordinates to image with landmarks as neighbourhoods around the coordinates"""
     c, d = landmarks.shape
-    if len(img_size) == 2:
-        h, w = img_size
-    elif len(img_size) == 3:
-        h, w, _ = img_size
-    else:
-        raise ValueError("img_size must be a tuple of length 2 or 3")
+    h, w, *_ = img_size
+
     landmark_img = np.zeros((c, h, w), dtype=np.float32)
     if sigma is None:
         sigma = np.ones(c) * 1.0
@@ -122,7 +118,7 @@ def create_radial_mask(landmarks, img_size, pixel_size, device="cpu", radius=4, 
     """
     Create a radial mask around the landmarks
     """
-    h, w = img_size
+    h, w, *_ = img_size
     yy, xx = torch.meshgrid(torch.arange(h, device=device), torch.arange(w, device=device),
                             indexing='ij')
     mask = torch.zeros((landmarks.shape[0], h, w), device=device)
@@ -145,7 +141,7 @@ def create_radial_mask_batch(landmarks, img_size, pixel_size, device="cpu", radi
     """
     Create a radial mask around the landmarks
     """
-    h, w = img_size
+    h, w, *_ = img_size
     mask = torch.zeros((landmarks.shape[0], landmarks.shape[1], h, w), device=device)
     for i in range(landmarks.shape[0]):
         mask[i] = create_radial_mask(landmarks[i], img_size, pixel_size[i], device, radius, min_radius, do_normalise)
