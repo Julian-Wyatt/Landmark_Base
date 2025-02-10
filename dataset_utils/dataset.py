@@ -268,7 +268,9 @@ class LandmarkDataset(Dataset):
             sigma=self.SIGMAS)
 
         if self.cfg_BCE_weight > 0:
-            output["y_img_radial"] = output["y_img_initial"]
+            output["y_img_radial"] = (output["y_img_initial"] - output["y_img_initial"].min()) / (
+                    output["y_img_initial"].max() - output["y_img_initial"].min())
+
         output["y_img"] = output["y_img_initial"]
         output["pixel_per_mm"] = np.array([metas["pixels_per_mm"], metas["pixels_per_mm"]], dtype=np.float32)
         output["pixel_size"] = (np.array([metas["pixels_per_mm"], metas["pixels_per_mm"]], dtype=np.float32) *

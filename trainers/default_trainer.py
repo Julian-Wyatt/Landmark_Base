@@ -148,7 +148,8 @@ class LandmarkDetection(L.LightningModule):
 
         elif self.cfg.TRAINLOSSES.BCE_WEIGHT > 0:
             activated_heatmap = torch.nn.functional.sigmoid(output)
-            bce = torch.nn.functional.binary_cross_entropy_with_logits(output, batch["y_img_radial"], reduction='sum')
+            bce = torch.nn.functional.binary_cross_entropy_with_logits(output, batch["y_img_radial"], reduction='none')
+            bce = torch.mean(torch.sum(bce, dim=(2, 3)))
             loss_dict.update({f'{log_prefix}/combined_bce': bce.item()})
             loss += bce * self.cfg.TRAINLOSSES.BCE_WEIGHT
 
@@ -256,12 +257,6 @@ class LandmarkDetection(L.LightningModule):
         if self.log_wrapper is None:
             self.log_wrapper = LogWrapper(self.cfg, self.logger, lambda x, y, **kwargs: self.log(x, y, **kwargs))
 
-    def on_validation_epoch_end(self):
-        # Log the learning rate.
-        if self.cfg.TRAIN.USE_SCHEDULER != "":
-            lr = self.trainer.lr_scheduler_configs[0].scheduler.get_last_lr()[0]
-            self.log('learning_rate', lr, on_epoch=True, on_step=False, prog_bar=False)
-
 
     def on_train_start(self) -> None:
         if self.log_wrapper is None:
@@ -283,8 +278,8 @@ class LandmarkDetection(L.LightningModule):
             output_str += f" - Val L2: {self.trainer.callback_metrics['val/l2']:0.4f}"
         print(output_str)
 
-        if self.current_epoch % 10 == 0 and self.use_ema:
-            self.model_ema.copy_to(self.model)
+        # if self.current_epoch % 10 == 0 and self.use_ema:
+        #     self.model_ema.copy_to(self.model)
 
         if self.current_epoch % self.log_train_img_frequency == 0:
             self.batch_to_log = np.random.randint(0, self.trainer.num_training_batches)
@@ -334,6 +329,10 @@ class LandmarkDetection(L.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         self.log_wrapper.on_val_end()
+        # Log the learning rate.
+        if self.cfg.TRAIN.USE_SCHEDULER != "":
+            lr = self.trainer.lr_scheduler_configs[0].scheduler.get_last_lr()[0]
+            self.log('Charts/learning_rate', lr, on_epoch=True, on_step=False, prog_bar=False)
 
     @torch.no_grad()
     def unique_test_step(self, batch, batch_idx):
@@ -404,9 +403,9 @@ class LandmarkDetection(L.LightningModule):
         elif self.cfg.TRAIN.USE_SCHEDULER == "cycle":
             # You only look once config
             base_lr = self.cfg.TRAIN.LR
-            max_lr = 0.001
-            step_size_up = 2000
-            step_size_down = 2000
+            max_lr = 0.01
+            step_size_up = 20
+            step_size_down = 20
             mode = 'triangular2'
             cycle_momentum = False
             scheduler = torch.optim.lr_scheduler.CyclicLR(

@@ -21,6 +21,8 @@ def cache_data(cfg: Config):
                               f"{cfg.DATASET.IMG_SIZE[0]}x{cfg.DATASET.IMG_SIZE[1]}")
     annotations_df = pd.read_csv(f"{cfg.DATASET.ROOT_DIR}/{cfg.DATASET.ANNOTATIONS_FILE}")
 
+    annotations_df["image file"] = annotations_df["image file"].str.split('.').str[0]
+
     # loop over all image files
     # for each image file, load the image and the landmarks
     # resize the image
@@ -43,7 +45,7 @@ def cache_data(cfg: Config):
 
         # if the image has not been resized
         if not os.path.exists(cached_image_name):
-
+            # if True:
             image = cv2.imread(file, cv2.IMREAD_GRAYSCALE)
             annotation_original_image_shape = image.shape
             # preprocess from dataset_utils
@@ -58,7 +60,7 @@ def cache_data(cfg: Config):
             #     pixels_per_mm = cfg.DATASET.dataset_pixels_per_mm
 
             NO_LABEL = False
-            image_data = annotations_df.loc[annotations_df["image file"] == f"{image_name}.bmp"]
+            image_data = annotations_df.loc[annotations_df["image file"] == f"{image_name}"]
             if image_data.empty:
                 # raise FileNotFoundError(
                 #     f"Annotation file not found - image {self.root_dir}{'/' if self.root_dir[-1] != '/' else ''}{annotation_dir}/{image_name}.txt")
@@ -68,17 +70,17 @@ def cache_data(cfg: Config):
             else:
                 if image_data.keys()[2] == "label":
                     landmarks = image_data.iloc[0, 3:].values.astype('float').reshape(-1, 2)
-                    pixels_per_mm = annotations_df.loc[annotations_df["image file"] == f"{image_name}.bmp"].iloc[0, 2]
+                    pixels_per_mm = annotations_df.loc[annotations_df["image file"] == f"{image_name}"].iloc[0, 2]
                 else:
                     landmarks = image_data.iloc[0, 2:].values.astype('float').reshape(-1, 2)
-                    pixels_per_mm = annotations_df.loc[annotations_df["image file"] == f"{image_name}.bmp"].iloc[0, 1]
+                    pixels_per_mm = annotations_df.loc[annotations_df["image file"] == f"{image_name}"].iloc[0, 1]
 
             operations["image_name"] = image_name
             # Key
 
             if NO_LABEL:
                 landmarks = np.zeros((cfg.DATASET.NUMBER_KEY_POINTS, 2))
-            # if random.random() < 0.05:
+            # if random.random() < 0.5:
             #     plt.imshow(image)
             #     plt.scatter(landmarks[:, 0], landmarks[:, 1], c='r', s=2)
             #     # plt.title(f"Image {batch['name'][0]}")
@@ -127,13 +129,13 @@ def CephAdoAdu(dir=""):
     print(under_age_labels.symmetric_difference(under_age_images))
 
     total_labels = pd.DataFrame(
-        columns=["image file", "spacing(mm)", "label"] + [f"p{i}{dim}" for dim in ["x", "y"] for i in range(1, 11)])
+        columns=["image file", "spacing(mm)", "label"] + [f"p{i}{dim}" for i in range(1, 11) for dim in ["x", "y"]])
     for subset_dir in ["adult", "under_age"]:
         for image in os.listdir(f"{dir}/{subset_dir}/dataset"):
             if image.endswith(".jpg"):
                 image_name = image.split(".")[0]
                 image_data = {
-                    "image file": f"{image_name}.bmp",
+                    "image file": f"{image_name}.jpg",
                     "spacing(mm)": pixels_per_mm,
                     "label": subset_dir
                 }
@@ -261,13 +263,16 @@ def main(config_file=""):
 
 if __name__ == "__main__":
     visualise_cached_data(config.get_config(
-        "/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAI24.yaml"))
+        "/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAIAdoAdu24.yaml"))
+
     # main("/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAI24.yaml")
-    # main("/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAIAdoAdu24.yaml")
-    pass
     # CephAdoAdu("/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/CephAdoAdu Dataset")
+    # main("/Users/julatt/Documents/DPhil/Year 2/landmark_detection_base/configs/local_test_ceph_MICCAIAdoAdu24.yaml")
     # MICCAI2024(
     #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge")
+    # visualiseLandmarksOverDataset(
+    #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/images",
+    #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/labels_fix_v2.csv")
     # visualiseLandmarksOverDataset(
     #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/images",
     #     "/Users/julatt/Documents/DPhil/Year 1/DiffLand/datasets/datasets-in-use/xray-cephalometric-land/2024-MICCAI-Challenge/Training Set/labels_fix_v2.csv")
